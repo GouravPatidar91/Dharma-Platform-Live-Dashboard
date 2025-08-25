@@ -1,0 +1,276 @@
+version: '3.8'
+
+services:
+  # Database Services
+  mongodb:
+    image: mongo:7.0
+    container_name: dharma-mongodb
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: password
+      MONGO_INITDB_DATABASE: dharma_platform
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+      - ./infrastructure/mongodb/init:/docker-entrypoint-initdb.d
+    networks:
+      - dharma-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  postgresql:
+    image: postgres:16
+    container_name: dharma-postgresql
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: dharma
+      POSTGRES_USER: dharma_user
+      POSTGRES_PASSWORD: dharma_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgresql_data:/var/lib/postgresql/data
+      - ./infrastructure/postgresql/init:/docker-entrypoint-initdb.d
+    networks:
+      - dharma-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dharma_user -d dharma"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    container_name: dharma-elasticsearch
+    restart: unless-stopped
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    networks:
+      - dharma-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: dharma-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - dharma-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Message Queue
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: dharma-kafka
+    restart: unless-stopped
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: true
+    ports:
+      - "29092:29092"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    networks:
+      - dharma-network
+    depends_on:
+      - zookeeper
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: dharma-zookeeper
+    restart: unless-stopped
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+    networks:
+      - dharma-network
+
+  # Application Services
+  data-collection-service:
+    build:
+      context: ./services/data-collection-service
+      dockerfile: Dockerfile
+    container_name: dharma-data-collection
+    restart: unless-stopped
+    environment:
+      - DB_MONGODB_URL=mongodb://admin:password@mongodb:27017
+      - REDIS_URL=redis://redis:6379
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./shared:/app/shared:ro
+    networks:
+      - dharma-network
+    depends_on:
+      - mongodb
+      - redis
+      - kafka
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  ai-analysis-service:
+    build:
+      context: ./services/ai-analysis-service
+      dockerfile: Dockerfile
+    container_name: dharma-ai-analysis
+    restart: unless-stopped
+    environment:
+      - DB_MONGODB_URL=mongodb://admin:password@mongodb:27017
+      - REDIS_URL=redis://redis:6379
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./shared:/app/shared:ro
+      - ./models:/app/models:ro
+    networks:
+      - dharma-network
+    depends_on:
+      - mongodb
+      - redis
+      - kafka
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  api-gateway-service:
+    build:
+      context: ./services/api-gateway-service
+      dockerfile: Dockerfile
+    container_name: dharma-api-gateway
+    restart: unless-stopped
+    environment:
+      - DB_POSTGRESQL_URL=postgresql://dharma_user:dharma_password@postgresql:5432/dharma
+      - REDIS_URL=redis://redis:6379
+      - SECRET_KEY=your-secret-key-change-in-production
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./shared:/app/shared:ro
+    networks:
+      - dharma-network
+    depends_on:
+      - postgresql
+      - redis
+      - data-collection-service
+      - ai-analysis-service
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  dashboard-service:
+    build:
+      context: ./services/dashboard-service
+      dockerfile: Dockerfile
+    container_name: dharma-dashboard
+    restart: unless-stopped
+    environment:
+      - API_GATEWAY_URL=http://api-gateway-service:8080
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./shared:/app/shared:ro
+    networks:
+      - dharma-network
+    depends_on:
+      - api-gateway-service
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Monitoring Services
+  prometheus:
+    image: prom/prometheus:v2.47.0
+    container_name: dharma-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infrastructure/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    networks:
+      - dharma-network
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+
+  grafana:
+    image: grafana/grafana:10.2.0
+    container_name: dharma-grafana
+    restart: unless-stopped
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./infrastructure/grafana/provisioning:/etc/grafana/provisioning:ro
+    networks:
+      - dharma-network
+    depends_on:
+      - prometheus
+
+volumes:
+  mongodb_data:
+  postgresql_data:
+  elasticsearch_data:
+  redis_data:
+  kafka_data:
+  zookeeper_data:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  dharma-network:
+    driver: bridge
