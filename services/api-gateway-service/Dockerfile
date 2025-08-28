@@ -11,7 +11,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install Python dependencies
-COPY requirements.txt .
+COPY services/api-gateway-service/requirements.txt .
 RUN pip install --no-cache-dir --user -r requirements.txt
 
 # Production stage
@@ -31,9 +31,15 @@ RUN apt-get update && apt-get install -y \
 # Copy Python packages from builder stage
 COPY --from=builder /root/.local /home/dharma/.local
 
+# Copy shared modules first (from project root context)
+COPY shared/ ./shared/
+
+# Copy validation scripts
+COPY scripts/validate_credentials.py ./scripts/
+COPY scripts/docker_startup_check.py ./scripts/
+
 # Copy application code
-COPY . .
-COPY --from=../../shared /app/shared ./shared
+COPY services/api-gateway-service/ .
 
 # Set ownership and permissions
 RUN chown -R dharma:dharma /app
@@ -49,5 +55,19 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 # Expose port
 EXPOSE 8080
 
-# Run the application
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+# Create startup script that validates environment before starting the service
+RUN echo '#!/bin/bash\n\
+set -e\n\
+echo "🚀 Starting API Gateway Service..."\n\
+export SERVICE_NAME=api-gateway-service\n\
+python scripts/docker_startup_check.py\n\
+if [ $? -ne 0 ]; then\n\
+    echo "❌ Startup validation failed, exiting..."\n\
+    exit 1\n\
+fi\n\
+echo "✅ Starting application..."\n\
+exec uvicorn main:app --host 0.0.0.0 --port 8080\n\
+' > /app/start.sh && chmod +x /app/start.sh
+
+# Run the application with startup validation
+CMD ["/app/start.sh"]

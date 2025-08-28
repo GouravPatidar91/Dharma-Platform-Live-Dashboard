@@ -1,6 +1,7 @@
 """MongoDB connection manager and utilities."""
 
 import asyncio
+from datetime import datetime
 from typing import Optional, Dict, Any, List
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
@@ -140,4 +141,156 @@ class MongoDBManager:
             raise RuntimeError("Database not connected")
         
         cursor = self.database.campaigns.find({"status": "active"})
+        return await cursor.to_list(length=None)
+    
+    async def insert_user_profile(self, user_data: Dict[str, Any]) -> str:
+        """Insert or update a user profile."""
+        if not self.database:
+            raise RuntimeError("Database not connected")
+        
+        # Use upsert to handle existing users
+        result = await self.database.user_profiles.replace_one(
+            {"platform": user_data["platform"], "user_id": user_data["user_id"]},
+            user_data,
+            upsert=True
+        )
+        
+        if result.upserted_id:
+            return str(result.upserted_id)
+        else:
+            # Find the existing document
+            existing = await self.database.user_profiles.find_one(
+                {"platform": user_data["platform"], "user_id": user_data["user_id"]}
+            )
+            return str(existing["_id"]) if existing else ""
+    
+    async def get_user_profile(self, platform: str, user_id: str) -> Optional[Dict[str, Any]]:
+        """Get user profile by platform and user ID."""
+        if not self.database:
+            raise RuntimeError("Database not connected")
+        
+        return await self.database.user_profiles.find_one(
+            {"platform": platform, "user_id": user_id}
+        )
+    
+    async def update_user_bot_probability(self, platform: str, user_id: str, bot_probability: float) -> bool:
+        """Update user's bot probability score."""
+        if not self.database:
+            raise RuntimeError("Database not connected")
+        
+        result = await self.database.user_profiles.update_one(
+            {"platform": platform, "user_id": user_id},
+            {"$set": {"bot_probability": bot_probability, "updated_at": datetime.utcnow()}}
+        )
+        return result.modified_count > 0
+    
+    async def find_posts_by_sentiment(
+        self, 
+        sentiment: str, 
+        limit: int = 100,
+        skip: int = 0,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None
+    ) -> List[Dict[str, Any]]:
+        """Find posts by sentiment with optional date filtering."""
+        if not self.database:
+            raise RuntimeError("Database not connected")
+        
+        filter_query = {"analysis_results.sentiment": sentiment}
+        
+        if start_date or end_date:
+            date_filter = {}
+            if start_date:
+                date_filter["$gte"] = start_date
+            if end_date:
+                date_filter["$lte"] = end_date
+            filter_query["timestamp"] = date_filter
+        
+        cursor = self.database.posts.find(filter_query).skip(skip).limit(limit).sort("timestamp", -1)
+        return await cursor.to_list(length=limit)
+    
+    async def find_high_risk_posts(
+        self, 
+        risk_threshold: float = 0.7,
+        limit: int = 100
+    ) -> List[Dict[str, Any]]:
+        """Find posts with high risk scores."""
+        if not self.database:
+            raise RuntimeError("Database not connected")
+        
+        cursor = self.database.posts.find(
+            {"analysis_results.risk_score": {"$gte": risk_threshold}}
+        ).sort("analysis_results.risk_score", -1).limit(limit)
+        
+        return await cursor.to_list(length=limit)
+    
+    async def get_posts_by_user(
+        self, 
+        user_id: str, 
+        platform: str,
+        limit: int = 100,
+        skip: int = 0
+    ) -> List[Dict[str, Any]]:
+        """Get posts by specific user."""
+        if not self.database:
+            raise RuntimeError("Database not connected")
+        
+        cursor = self.database.posts.find(
+            {"user_id": user_id, "platform": platform}
+        ).sort("timestamp", -1).skip(skip).limit(limit)
+        
+        return await cursor.to_list(length=limit)
+    
+    async def aggregate_sentiment_trends(
+        self, 
+        start_date: datetime,
+        end_date: datetime,
+        interval: str = "1d"
+    ) -> List[Dict[str, Any]]:
+        """Aggregate sentiment trends over time."""
+        if not self.database:
+            raise RuntimeError("Database not connected")
+        
+        pipeline = [
+            {
+                "$match": {
+                    "timestamp": {"$gte": start_date, "$lte": end_date},
+                    "analysis_results.sentiment": {"$exists": True}
+                }
+            },
+            {
+                "$group": {
+                    "_id": {
+                        "date": {
+                            "$dateToString": {
+                                "format": "%Y-%m-%d" if interval == "1d" else "%Y-%m-%d %H:00:00",
+                                "date": "$timestamp"
+                            }
+                        },
+                        "sentiment": "$analysis_results.sentiment"
+                    },
+                    "count": {"$sum": 1}
+                }
+            },
+            {
+                "$sort": {"_id.date": 1}
+            }
+        ]
+        
+        cursor = self.database.posts.aggregate(pipeline)
+        return await cursor.to_list(length=None)
+    
+    async def get_campaign_participants(self, campaign_id: str) -> List[Dict[str, Any]]:
+        """Get detailed information about campaign participants."""
+        if not self.database:
+            raise RuntimeError("Database not connected")
+        
+        campaign = await self.database.campaigns.find_one({"_id": campaign_id})
+        if not campaign or "participants" not in campaign:
+            return []
+        
+        # Get user profiles for all participants
+        cursor = self.database.user_profiles.find(
+            {"_id": {"$in": campaign["participants"]}}
+        )
         return await cursor.to_list(length=None)

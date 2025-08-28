@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # Database Services
   mongodb:
@@ -122,21 +120,98 @@ services:
     networks:
       - dharma-network
 
-  # Application Services
-  data-collection-service:
-    build:
-      context: ./services/data-collection-service
-      dockerfile: Dockerfile
-    container_name: dharma-data-collection
+  # Workflow Orchestration
+  temporal:
+    image: temporalio/auto-setup:1.22.0
+    container_name: dharma-temporal
     restart: unless-stopped
     environment:
+      - DB=postgresql
+      - DB_PORT=5432
+      - POSTGRES_USER=dharma_user
+      - POSTGRES_PWD=dharma_password
+      - POSTGRES_SEEDS=postgresql
+      - DYNAMIC_CONFIG_FILE_PATH=config/dynamicconfig/development-sql.yaml
+    ports:
+      - "7233:7233"
+    volumes:
+      - ./infrastructure/temporal:/etc/temporal/config/dynamicconfig
+    networks:
+      - dharma-network
+    depends_on:
+      - postgresql
+    healthcheck:
+      test: ["CMD", "tctl", "--address", "temporal:7233", "cluster", "health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  temporal-ui:
+    image: temporalio/ui:2.21.0
+    container_name: dharma-temporal-ui
+    restart: unless-stopped
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+      - TEMPORAL_CORS_ORIGINS=http://localhost:3000
+    ports:
+      - "8088:8080"
+    networks:
+      - dharma-network
+    depends_on:
+      - temporal
+
+  # Application Services
+  event-bus-service:
+    build:
+      context: .
+      dockerfile: ./services/event-bus-service/Dockerfile
+    container_name: dharma-event-bus
+    restart: unless-stopped
+    environment:
+      - EVENT_BUS_KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - EVENT_BUS_TEMPORAL_HOST=temporal:7233
+      - EVENT_BUS_LOG_LEVEL=INFO
+    ports:
+      - "8005:8005"
+    volumes:
+      - ./shared:/app/shared:ro
+    networks:
+      - dharma-network
+    depends_on:
+      - kafka
+      - temporal
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8005/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  data-collection-service:
+    build:
+      context: .
+      dockerfile: ./services/data-collection-service/Dockerfile
+    container_name: dharma-data-collection
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - SERVICE_NAME=data-collection-service
       - DB_MONGODB_URL=mongodb://admin:password@mongodb:27017
       - REDIS_URL=redis://redis:6379
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      # API credentials loaded from .env file
+      - TWITTER_API_KEY=${TWITTER_API_KEY}
+      - TWITTER_API_SECRET=${TWITTER_API_SECRET}
+      - TWITTER_BEARER_TOKEN=${TWITTER_BEARER_TOKEN}
+      - TWITTER_ACCESS_TOKEN=${TWITTER_ACCESS_TOKEN}
+      - TWITTER_ACCESS_TOKEN_SECRET=${TWITTER_ACCESS_TOKEN_SECRET}
+      - YOUTUBE_API_KEY=${YOUTUBE_API_KEY}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
     ports:
       - "8000:8000"
     volumes:
       - ./shared:/app/shared:ro
+      - ./scripts:/app/scripts:ro
     networks:
       - dharma-network
     depends_on:
@@ -144,18 +219,22 @@ services:
       - redis
       - kafka
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
+      test: ["CMD", "python", "/app/scripts/validate_credentials.py"]
+      interval: 60s
+      timeout: 30s
       retries: 3
+      start_period: 30s
 
   ai-analysis-service:
     build:
-      context: ./services/ai-analysis-service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: ./services/ai-analysis-service/Dockerfile
     container_name: dharma-ai-analysis
     restart: unless-stopped
+    env_file:
+      - .env
     environment:
+      - SERVICE_NAME=ai-analysis-service
       - DB_MONGODB_URL=mongodb://admin:password@mongodb:27017
       - REDIS_URL=redis://redis:6379
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
@@ -164,6 +243,7 @@ services:
     volumes:
       - ./shared:/app/shared:ro
       - ./models:/app/models:ro
+      - ./scripts:/app/scripts:ro
     networks:
       - dharma-network
     depends_on:
@@ -171,25 +251,61 @@ services:
       - redis
       - kafka
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      test: ["CMD", "python", "/app/scripts/validate_credentials.py"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 30s
+
+  stream-processing-service:
+    build:
+      context: .
+      dockerfile: ./services/stream-processing-service/Dockerfile
+    container_name: dharma-stream-processing
+    restart: unless-stopped
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - KAFKA_TOPIC_PREFIX=dharma
+      - KAFKA_NUM_PARTITIONS=3
+      - KAFKA_REPLICATION_FACTOR=1
+      - KAFKA_CONSUMER_GROUP=dharma-stream-processors
+      - EVENT_BUS_URL=http://event-bus-service:8005
+    ports:
+      - "8002:8002"
+    volumes:
+      - ./shared:/app/shared:ro
+    networks:
+      - dharma-network
+    depends_on:
+      - kafka
+      - mongodb
+      - redis
+      - event-bus-service
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
       interval: 30s
       timeout: 10s
       retries: 3
 
   api-gateway-service:
     build:
-      context: ./services/api-gateway-service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: ./services/api-gateway-service/Dockerfile
     container_name: dharma-api-gateway
     restart: unless-stopped
+    env_file:
+      - .env
     environment:
+      - SERVICE_NAME=api-gateway-service
       - DB_POSTGRESQL_URL=postgresql://dharma_user:dharma_password@postgresql:5432/dharma
       - REDIS_URL=redis://redis:6379
-      - SECRET_KEY=your-secret-key-change-in-production
+      - SECRET_KEY=${JWT_SECRET_KEY}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
     ports:
       - "8080:8080"
     volumes:
       - ./shared:/app/shared:ro
+      - ./scripts:/app/scripts:ro
     networks:
       - dharma-network
     depends_on:
@@ -198,32 +314,38 @@ services:
       - data-collection-service
       - ai-analysis-service
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 10s
+      test: ["CMD", "python", "/app/scripts/validate_credentials.py"]
+      interval: 60s
+      timeout: 30s
       retries: 3
+      start_period: 30s
 
   dashboard-service:
     build:
-      context: ./services/dashboard-service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: ./services/dashboard-service/Dockerfile
     container_name: dharma-dashboard
     restart: unless-stopped
+    env_file:
+      - .env
     environment:
+      - SERVICE_NAME=dashboard-service
       - API_GATEWAY_URL=http://api-gateway-service:8080
     ports:
       - "8501:8501"
     volumes:
       - ./shared:/app/shared:ro
+      - ./scripts:/app/scripts:ro
     networks:
       - dharma-network
     depends_on:
       - api-gateway-service
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8501/health"]
-      interval: 30s
-      timeout: 10s
+      test: ["CMD", "python", "/app/scripts/validate_credentials.py"]
+      interval: 60s
+      timeout: 30s
       retries: 3
+      start_period: 30s
 
   # Monitoring Services
   prometheus:
