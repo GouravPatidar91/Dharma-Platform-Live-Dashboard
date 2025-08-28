@@ -12,6 +12,7 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import json
 import time
+import random
 
 # Page configuration
 st.set_page_config(
@@ -236,10 +237,14 @@ def show_campaign_analysis(posts_df, campaigns):
     st.subheader("🕸️ Network Analysis")
     
     # Generate sample network data
-    import networkx as nx
-    
-    G = nx.random_geometric_graph(20, 0.3)
-    pos = nx.spring_layout(G)
+    try:
+        import networkx as nx
+        G = nx.random_geometric_graph(20, 0.3)
+        pos = nx.spring_layout(G)
+    except ImportError:
+        # Fallback if networkx is not available
+        G = type('Graph', (), {'nodes': lambda: range(20), 'edges': lambda: [(i, (i+1)%20) for i in range(20)]})()
+        pos = {i: (random.random(), random.random()) for i in range(20)}
     
     edge_x = []
     edge_y = []
