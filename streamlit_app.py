@@ -20,9 +20,9 @@ def main():
     )
     
     try:
-        # Try ultra immersive dashboard first (most advanced)
-        from ultra_immersive_dashboard import main as ultra_dashboard_main
-        ultra_dashboard_main()
+        # Try fixed immersive dashboard first (Plotly compatible)
+        from fixed_immersive_dashboard import main as fixed_dashboard_main
+        fixed_dashboard_main()
     except ImportError:
         try:
             # Fallback to simple cloud dashboard (most reliable)
