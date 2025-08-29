@@ -133,8 +133,9 @@ class EnhancedThreatDetector:
         else:
             level = "MINIMAL"
         
-        return score, level, matched_keywords, threat_details    d
-ef search_youtube(self, query: str, max_results: int = 15) -> List[Dict]:
+        return score, level, matched_keywords, threat_details
+
+    def search_youtube(self, query: str, max_results: int = 15) -> List[Dict]:
         """Enhanced YouTube search with proper video information"""
         if not self.youtube_api_key:
             st.error("YouTube API key not configured")
