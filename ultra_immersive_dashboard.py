@@ -768,14 +768,12 @@ def create_advanced_threat_chart(results: List[Dict]) -> go.Figure:
             x=0.5
         ),
         xaxis=dict(
-            title="Threat Level",
-            titlefont=dict(size=16, color='white', family='Orbitron'),
+            title=dict(text="Threat Level", font=dict(size=16, color='white', family='Orbitron')),
             tickfont=dict(size=14, color='white', family='Orbitron'),
             gridcolor='rgba(255,255,255,0.2)'
         ),
         yaxis=dict(
-            title="Count",
-            titlefont=dict(size=16, color='white', family='Orbitron'),
+            title=dict(text="Count", font=dict(size=16, color='white', family='Orbitron')),
             tickfont=dict(size=14, color='white', family='Orbitron'),
             gridcolor='rgba(255,255,255,0.2)'
         ),
@@ -900,8 +898,8 @@ def create_timeline_heatmap(results: List[Dict]) -> go.Figure:
             font=dict(size=20, color='white', family='Orbitron'),
             x=0.5
         ),
-        xaxis=dict(title="Date", color='white'),
-        yaxis=dict(title="Platform", color='white'),
+        xaxis=dict(title=dict(text="Date", font=dict(color='white'))),
+        yaxis=dict(title=dict(text="Platform", font=dict(color='white'))),
         plot_bgcolor='rgba(0,0,0,0)',
         paper_bgcolor='rgba(0,0,0,0)',
         font_color='white'
