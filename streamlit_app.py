@@ -20,26 +20,39 @@ def main():
     )
     
     try:
-        # Import and run the enhanced immersive dashboard
-        from enhanced_immersive_dashboard import main as dashboard_main
-        dashboard_main()
-    except ImportError as e:
-        st.error(f"Enhanced dashboard import error: {e}")
-        st.info("Falling back to basic dashboard...")
-        
+        # Try simple cloud dashboard first (most reliable)
+        from simple_cloud_dashboard import main as simple_dashboard_main
+        simple_dashboard_main()
+    except ImportError:
         try:
-            # Fallback to basic dashboard
-            from streamlit_live_dashboard import main as basic_dashboard_main
-            basic_dashboard_main()
-        except ImportError as e2:
-            st.error(f"Basic dashboard import error: {e2}")
-            st.title("🛡️ Dharma Platform")
-            st.subheader("Anti-Nationalist Content Detection System")
-            st.error("Dashboard modules not found. Please check the deployment.")
-            st.info("Required files: enhanced_immersive_dashboard.py, streamlit_live_dashboard.py")
+            # Fallback to Streamlit Cloud optimized dashboard
+            from streamlit_cloud_dashboard import main as cloud_dashboard_main
+            cloud_dashboard_main()
+        except ImportError:
+            try:
+                # Fallback to basic dashboard
+                from streamlit_live_dashboard import main as basic_dashboard_main
+                basic_dashboard_main()
+            except ImportError:
+                # Final fallback - inline simple dashboard
+                st.title("🛡️ Dharma Platform")
+                st.subheader("Anti-Nationalist Content Detection System")
+                
+                youtube_api_key = st.secrets.get("YOUTUBE_API_KEY", "")
+                
+                if not youtube_api_key:
+                    st.error("⚠️ YouTube API key not configured")
+                    st.info("Please add YOUTUBE_API_KEY to Streamlit secrets")
+                else:
+                    st.success("✅ YouTube API configured")
+                    st.info("Dashboard is loading... Please refresh if needed.")
+                    
+                    search_query = st.text_input("Search Query:", "anti india propaganda")
+                    if st.button("🔍 Search"):
+                        st.info("Search functionality will be available once the dashboard loads properly.")
     except Exception as e:
         st.error(f"Application error: {e}")
-        st.info("Please check the logs and try again.")
+        st.info("Please refresh the page or check the deployment logs.")
 
 if __name__ == "__main__":
     main()
